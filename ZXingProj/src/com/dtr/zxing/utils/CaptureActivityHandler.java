@@ -31,80 +31,106 @@ import com.google.zxing.Result;
 /**
  * This class handles all the messaging which comprises the state machine for
  * capture.
- * 
+ * 在扫描二维码activity内使用的handler
+ * 这个类并不能算工具类 是和activity耦合的一个类
+ *
  * @author dswitkin@google.com (Daniel Switkin)
  */
 public class CaptureActivityHandler extends Handler {
 
-	private final CaptureActivity activity;
-	private final DecodeThread decodeThread;
-	private final CameraManager cameraManager;
-	private State state;
+    private final CaptureActivity activity;
+    private final DecodeThread decodeThread;
+    private final CameraManager cameraManager;
+    private State state;
 
-	private enum State {
-		PREVIEW, SUCCESS, DONE
-	}
+    /**
+     * handler的状态
+     */
+    private enum State {
+        PREVIEW, SUCCESS, DONE
+    }
 
-	public CaptureActivityHandler(CaptureActivity activity, CameraManager cameraManager, int decodeMode) {
-		this.activity = activity;
-		decodeThread = new DecodeThread(activity, decodeMode);
-		decodeThread.start();
-		state = State.SUCCESS;
+    public CaptureActivityHandler(CaptureActivity activity, CameraManager cameraManager, int decodeMode) {
+        this.activity = activity;
+        // 启动解码的工作线程
+        decodeThread = new DecodeThread(activity, decodeMode);
+        decodeThread.start();
+        // 状态设为success
+        state = State.SUCCESS;
 
-		// Start ourselves capturing previews and decoding.
-		this.cameraManager = cameraManager;
-		cameraManager.startPreview();
-		restartPreviewAndDecode();
-	}
+        // Start ourselves capturing previews and decoding.
+        // 启动预览并且开始解码
+        this.cameraManager = cameraManager;
+        cameraManager.startPreview();
+        restartPreviewAndDecode();
+    }
 
-	@Override
-	public void handleMessage(Message message) {
-		switch (message.what) {
-		case R.id.restart_preview:
-			restartPreviewAndDecode();
-			break;
-		case R.id.decode_succeeded:
-			state = State.SUCCESS;
-			Bundle bundle = message.getData();
+    @Override
+    public void handleMessage(Message message) {
+        switch (message.what) {
+            case R.id.restart_preview:
+                // 重启预览并且解码
+                restartPreviewAndDecode();
+                break;
+            case R.id.decode_succeeded:
+                // 解码成功了 发送数据到activity
+                state = State.SUCCESS;
+                Bundle bundle = message.getData();
 
-			activity.handleDecode((Result) message.obj, bundle);
-			break;
-		case R.id.decode_failed:
-			// We're decoding as fast as possible, so when one decode fails,
-			// start another.
-			state = State.PREVIEW;
-			cameraManager.requestPreviewFrame(decodeThread.getHandler(), R.id.decode);
-			break;
-		case R.id.return_scan_result:
-			activity.setResult(Activity.RESULT_OK, (Intent) message.obj);
-			activity.finish();
-			break;
-		}
-	}
+                activity.handleDecode((Result) message.obj, bundle);
+                break;
+            case R.id.decode_failed:
+                // 解码失败 状态改为preview 开始另一个预览
+                // fixme 这里可能需要开另外一个handler
+                // We're decoding as fast as possible, so when one decode fails,
+                // start another.
+                state = State.PREVIEW;
+                cameraManager.requestPreviewFrame(decodeThread.getHandler(), R.id.decode);
+                break;
+            case R.id.return_scan_result:
+                // 关闭activity 并且return 一个result
+                activity.setResult(Activity.RESULT_OK, (Intent) message.obj);
+                activity.finish();
+                break;
+        }
+    }
 
-	public void quitSynchronously() {
-		state = State.DONE;
-		cameraManager.stopPreview();
-		Message quit = Message.obtain(decodeThread.getHandler(), R.id.quit);
-		quit.sendToTarget();
-		try {
-			// Wait at most half a second; should be enough time, and onPause()
-			// will timeout quickly
-			decodeThread.join(500L);
-		} catch (InterruptedException e) {
-			// continue
-		}
+    /**
+     * 同步的方式退出
+     */
+    public void quitSynchronously() {
+        // 状态设为done
+        state = State.DONE;
+        // 关闭camera
+        cameraManager.stopPreview();
+        // 发送quit到handler
+        Message quit = Message.obtain(decodeThread.getHandler(), R.id.quit);
+        quit.sendToTarget();
+        try {
+            // Wait at most half a second; should be enough time, and onPause()
+            // will timeout quickly
+            // 阻塞直到工作线程结束
+            decodeThread.join(500L);
+        } catch (InterruptedException e) {
+            // continue
+        }
 
-		// Be absolutely sure we don't send any queued up messages
-		removeMessages(R.id.decode_succeeded);
-		removeMessages(R.id.decode_failed);
-	}
+        // 清空本handler内的成功失败消息
+        // Be absolutely sure we don't send any queued up messages
+        removeMessages(R.id.decode_succeeded);
+        removeMessages(R.id.decode_failed);
+    }
 
-	private void restartPreviewAndDecode() {
-		if (state == State.SUCCESS) {
-			state = State.PREVIEW;
-			cameraManager.requestPreviewFrame(decodeThread.getHandler(), R.id.decode);
-		}
-	}
+    /**
+     * 重启预览和解码
+     */
+    private void restartPreviewAndDecode() {
+        // 如果当前状态时success则改为preview 并且开始获取预览
+        if (state == State.SUCCESS) {
+            state = State.PREVIEW;
+            // 发送decode请求给handler 这个handler实际就是DecodeHandler
+            cameraManager.requestPreviewFrame(decodeThread.getHandler(), R.id.decode);
+        }
+    }
 
 }
